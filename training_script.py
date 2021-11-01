@@ -1,3 +1,4 @@
+from pandas.core.frame import DataFrame
 from tensorflow.python import keras
 from tensorflow.python.keras.callbacks import EarlyStopping
 from tensorflow.python.keras.layers.core import Lambda
@@ -25,6 +26,7 @@ from nltk.corpus import stopwords
 
 import zipfile
 import string
+import os
 
 import pandas as pd
 import numpy as np
@@ -33,11 +35,16 @@ import numpy as np
 
 def read_book (zipfile):
     print(zipfile.namelist())
-    return zipfile.read(zipfile.namelist()[0]).decode("utf-8")
+    return zipfile.read(zipfile.namelist()[0])
 
-def load_zipfile_to_memory (fp: str):
-    with zipfile.ZipFile(fp, "r") as zfile:
-        return read_book(zfile)
+def load_zipfile_to_memory (fp: str, encoding: str):
+	book_as_string = None
+	with zipfile.ZipFile(fp, "r") as zfile:
+		try:
+			book_as_string = read_book(zfile).decode(encoding)
+		except UnicodeDecodeError:
+			pass
+	return book_as_string
 
 tbl = str.maketrans("","",string.punctuation+string.digits)
 
@@ -89,7 +96,7 @@ def build_siamese_network (input_shape, embedding_matrix, embedding_dim, max_wor
 	return model
 
 def build_dataframe():
-	master_df = pd.read_csv("pg_catalog.csv", sep=",")
+	master_df = pd.read_csv("pg_catalog.csv", sep=",", low_memory=False)
 	master_df = master_df[(master_df.Language == "en") & (master_df.Type == "Text")]
 	master_df.drop(columns=["Bookshelves", "Subjects", "Language", "Type", "Issued"], inplace=True)
 	master_df.dropna(how="any", inplace=True)
@@ -124,7 +131,7 @@ def get_embeddings_index():
 			embeddings_index[word] = coefs
 	return embeddings_index
 
-def get_sequences(tokenizer, books: list, sequence_max_length: int):
+def get_sequences(tokenizer: Tokenizer, books: tuple, sequence_max_length: int):
 	assert(len(books) == 2)
 	combined = " ".join([ preprocess_text(b) for b in books ])
 	tokenizer.fit_on_texts(combined)
@@ -132,7 +139,7 @@ def get_sequences(tokenizer, books: list, sequence_max_length: int):
 	sequences = pad_sequences(sequences, maxlen=sequence_max_length, padding="post")
 	return sequences
 
-def get_embedding_matrix(tokenizer, max_words, embedding_dim):
+def get_embedding_matrix(tokenizer: Tokenizer, max_words: int, embedding_dim: int):
 	embeddings_index = get_embeddings_index()
 	embedding_matrix = np.zeros((max_words, embedding_dim))
 	for word, i in tokenizer.word_index.items():
@@ -144,12 +151,39 @@ def get_embedding_matrix(tokenizer, max_words, embedding_dim):
 
 # TODO: load books into dataframes and then basically do the following stuff
 
+def check_if_exists(a):
+	filepath = "gutenberg_books_en/{}.zip"
+	found_filepath = (None, None)
+	if os.path.exists(filepath.format(str(a))):
+		found_filepath = filepath.format(str(a)), "ASCII"
+	elif os.path.exists(filepath.format(str(a) + "-0")):
+		found_filepath = filepath.format(str(a) + "-0"), "UTF-8"
+	elif os.path.exists(filepath.format(str(a) + "-8")):
+		found_filepath = filepath.format(str(a) + "-8"), "ISO-8859-1"
+	else:
+		print ("strike")
+	return found_filepath
+
+def load_files_into_memory(df: DataFrame):
+	tuples = []
+	for _,a,b,similar in df.itertuples():
+		a = check_if_exists(a)
+		b = check_if_exists(b)
+		if a[0] is not None and b[0] is not None:
+			a = load_zipfile_to_memory(a[0], a[1])
+			b = load_zipfile_to_memory(b[0], b[1])
+			if a is not None and b is not None:
+				tuples.append((a,b,similar))
+	return pd.DataFrame(tuples, columns=["a", "b", "similar"])
 
 
+df = build_dataframe()
+df = load_files_into_memory(df)
 
-
-
-
+print(df)
+for i in df.itertuples():
+	print(i)
+	break
 
 '''
 books = []
