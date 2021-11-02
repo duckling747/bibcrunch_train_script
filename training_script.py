@@ -244,7 +244,7 @@ history = model.fit (
 	callbacks=[early_stopping]
 )
 
-ypred = model.predict([X1test, X2test], ytest)
+ypred = model.predict([X1test, X2test])
 print(ypred)
 
 model.save("model.h5")
