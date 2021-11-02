@@ -132,7 +132,7 @@ def get_embeddings_index():
 			embeddings_index[word] = coefs
 	return embeddings_index
 
-def make_sequences (tokenizer: Tokenizer, books: list, sequence_max_length: int):
+def make_sequences (tokenizer: Tokenizer, books: np.ndarray, sequence_max_length: int):
 	tokenizer.fit_on_texts(books)
 	books = tokenizer.texts_to_sequences(books)
 	books = pad_sequences(books,
@@ -194,9 +194,9 @@ df["combined"] = df["combined"].map(lambda row: preprocess_text(row))
 print("done")
 
 print("making sequences...")
-X = make_sequences(tokenizer, books=df["combined"].to_list(), sequence_max_length=300)
+X = make_sequences(tokenizer, books=df["combined"].to_numpy(), sequence_max_length=300)
 print("done")
-y = df["similar"]
+y = df["similar"].to_numpy()
 del df
 print(X)
 print("len X:", len(X))
