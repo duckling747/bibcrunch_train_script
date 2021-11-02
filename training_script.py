@@ -1,7 +1,8 @@
 from pandas.core.frame import DataFrame
 from tensorflow.python import keras
+from tensorflow.python.keras.backend import concatenate
 from tensorflow.python.keras.callbacks import EarlyStopping
-from tensorflow.python.keras.layers.core import Lambda
+from tensorflow.python.keras.layers.core import Dropout, Lambda
 from tensorflow.python.keras.layers.normalization.batch_normalization import BatchNormalization
 
 from tensorflow.keras.models import Model
@@ -48,20 +49,17 @@ def load_zipfile_to_memory (fp: str, encoding: str):
 
 
 tbl = str.maketrans("","",string.punctuation+string.digits)
-lm = nltk.wordnet.WordNetLemmatizer()
+#lm = nltk.wordnet.WordNetLemmatizer()
+st = nltk.stem.PorterStemmer()
 stoppers = stopwords.words("english")
 
 def preprocess_text (text: str):
-	text = text.translate(tbl)
-	text = [w.lower() for w in text.split()]
-	text = [w for w in text if w not in stoppers]
-	text = [w for w in text if w not in ENGLISH_STOP_WORDS]
-	text = [lm.lemmatize(w) for w in text]
-	return " ".join(text)
+	text = [ w.lower() for w in text.translate(tbl).split() ]
+	return " ".join([ st.stem(w) for w in text if w not in stoppers and w not in ENGLISH_STOP_WORDS ])
 
 vectorizer = TfidfVectorizer(input="content", use_idf=True)
 
-def calc_tfidf (wordlist):
+def calc_tfidf (wordlist: list):
     X = vectorizer.fit_transform([wordlist])
     print(X.shape)
     df = pd.DataFrame(X[0].T.todense(), index=vectorizer.get_feature_names(), columns=['TF-IDF'])
@@ -79,6 +77,7 @@ def build_siamese_network (input_shape, embedding_matrix, embedding_dim, max_wor
 	)
 	lstm = Bidirectional(LSTM(
 			units=lstm_units,
+			return_sequences=False,
 			dropout=0.2,
 			recurrent_dropout=0.2
 		)
@@ -88,8 +87,13 @@ def build_siamese_network (input_shape, embedding_matrix, embedding_dim, max_wor
 	x1 = lstm(e1)
 	x2 = lstm(e2)
 	manhattan_distance = lambda x: keras.backend.abs(x[0]-x[1])
-	merge = Lambda(function=manhattan_distance, output_shape=lambda x: x[0])([x1, x2])
+	merge = Lambda(function=manhattan_distance, name="manhattan distance", output_shape=lambda x: x[0])([x1, x2])
+	#merge = concatenate([x1,x2])
 	#merge = BatchNormalization()(merge)
+	#merge = Dropout(0.25)(merge)
+	#merge = Dense(50, activation="relu")(merge)
+	#merge = BatchNormalization()(merge)
+	#merge = Dropout(0.25)(merge)
 	outputs = Dense(1, activation="sigmoid")(merge)
 	model = Model(inputs=[a,b], outputs=outputs)
 	model.summary()
@@ -103,7 +107,7 @@ def build_dataframe():
 	master_df.dropna(how="any", inplace=True)
 
 	# due to time constraints, only take a random sample of books:
-	rand_books = master_df.sample(n=500)
+	rand_books = master_df.sample(n=100)
 
 	# presume that books are similar if: same LoCC
 	similar = [
@@ -186,8 +190,10 @@ embedding_dim = 100
 tokenizer = Tokenizer(num_words=max_words, oov_token="<OOV>")
 
 print("preprocessing texts...")
-df["a"] = df["a"].map(lambda row: preprocess_text(row))
-df["b"] = df["b"].map(lambda row: preprocess_text(row))
+#df["a"] = df["a"].map(lambda row: preprocess_text(row))
+#df["b"] = df["b"].map(lambda row: preprocess_text(row))
+df["a"] = [ preprocess_text(row) for row in df["a"] ]
+df["b"] = [ preprocess_text(row) for row in df["b"] ]
 print("done")
 
 print("fitting tokenizer...")
@@ -219,11 +225,11 @@ model = build_siamese_network (
 	input_shape=(300,),
 	embedding_matrix=embedding_matrix,
 	embedding_dim=embedding_dim,
-	lstm_units=20,
+	lstm_units=256,
 	max_words=max_words
 )
 
-early_stopping = EarlyStopping(monitor="loss", patience=5)
+early_stopping = EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)
 
 
 X1train, X1test, X2train, X2test, ytrain, ytest = train_test_split(X1, X2, y, test_size=0.2)
@@ -232,8 +238,16 @@ X1train, X1val, X2train, X2val, ytrain, yval = train_test_split(X1train, X2train
 history = model.fit (
 	[ X1train, X2train ], ytrain,
 	validation_data=([ X1val, X2val ], yval),
-	epochs=10, batch_size=64, shuffle=True,
+	epochs=1000,
+	batch_size=64,
+	shuffle=True,
 	callbacks=[early_stopping]
 )
+
+ypred = model.predict([X1test, X2test], ytest)
+print(ypred)
+
+model.save("model.h5")
+
 
 
