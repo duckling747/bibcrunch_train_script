@@ -103,7 +103,7 @@ def build_dataframe():
 	master_df.dropna(how="any", inplace=True)
 
 	# due to time constraints, only take a random sample of books:
-	rand_books = master_df.sample(n=15)
+	rand_books = master_df.sample(n=500)
 
 	# presume that books are similar if: same LoCC
 	similar = [
@@ -133,7 +133,6 @@ def get_embeddings_index():
 	return embeddings_index
 
 def make_sequences (tokenizer: Tokenizer, books: np.ndarray, sequence_max_length: int):
-	tokenizer.fit_on_texts(books)
 	books = tokenizer.texts_to_sequences(books)
 	books = pad_sequences(books,
 		maxlen=sequence_max_length,
@@ -146,11 +145,9 @@ def get_embedding_matrix(tokenizer: Tokenizer, max_words: int, embedding_dim: in
 	for word, i in tokenizer.word_index.items():
 		if i < max_words:
 			embedding_vector = embeddings_index.get(word)
-		if embedding_vector is not None:
+		if embedding_vector is not None and i < max_words:
 			embedding_matrix[i] = embedding_vector
 	return embedding_matrix
-
-# TODO: load books into dataframes and then basically do the following stuff
 
 def check_if_exists(a):
 	filepath = "gutenberg_books_en/{}.zip"
@@ -188,21 +185,34 @@ max_words = 10000
 embedding_dim = 100
 tokenizer = Tokenizer(num_words=max_words, oov_token="<OOV>")
 
+print("preprocessing texts...")
+df["a"] = df["a"].map(lambda row: preprocess_text(row))
+df["b"] = df["b"].map(lambda row: preprocess_text(row))
+print("done")
+
+print("fitting tokenizer...")
 df["combined"] = df["a"] + " " + df["b"]
-print("preprocessing...")
-df["combined"] = df["combined"].map(lambda row: preprocess_text(row))
+tokenizer.fit_on_texts(df["combined"].to_numpy())
 print("done")
 
 print("making sequences...")
-X = make_sequences(tokenizer, books=df["combined"].to_numpy(), sequence_max_length=300)
+X1 = make_sequences(tokenizer, books=df["a"].to_numpy(), sequence_max_length=300)
+X2 = make_sequences(tokenizer, books=df["b"].to_numpy(), sequence_max_length=300)
 print("done")
 y = df["similar"].to_numpy()
 del df
-print(X)
-print("len X:", len(X))
+#print(X1)
+for i in X1:
+	print (i)
+#print(X2)
+for i in X2:
+	print (i)
+print("len X1:", len(X1))
+print("len X2:", len(X2))
 print (y)
+print("len y:", len(y))
 
-'''
+
 embedding_matrix = get_embedding_matrix(tokenizer=tokenizer, max_words=max_words, embedding_dim=embedding_dim)
 
 model = build_siamese_network (
@@ -213,22 +223,17 @@ model = build_siamese_network (
 	max_words=max_words
 )
 
-early_stopping = EarlyStopping(monitor="val_loss", patience=3)
+early_stopping = EarlyStopping(monitor="loss", patience=5)
 
-print (sequences)
 
-X = sequences
-y = [0]
-'''
-'''
-Xtrain, Xtest, ytrain, ytest = train_test_split(X, y, test_size=0.2)
-Xtrain, Xval, ytrain, yval = train_test_split(Xtrain, ytrain, test_size=0.25)
+X1train, X1test, X2train, X2test, ytrain, ytest = train_test_split(X1, X2, y, test_size=0.2)
+X1train, X1val, X2train, X2val, ytrain, yval = train_test_split(X1train, X2train, ytrain, test_size=0.25)
 
 history = model.fit (
-	[ Xtrain[0], Xtrain[1] ], ytrain,
-	validation_data=([ Xval[0], Xval[1] ], yval),
+	[ X1train, X2train ], ytrain,
+	validation_data=([ X1val, X2val ], yval),
 	epochs=10, batch_size=64, shuffle=True,
 	callbacks=[early_stopping]
 )
-'''
+
 
