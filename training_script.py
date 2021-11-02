@@ -46,15 +46,16 @@ def load_zipfile_to_memory (fp: str, encoding: str):
 			pass
 	return book_as_string
 
-tbl = str.maketrans("","",string.punctuation+string.digits)
 
-def preprocess_text (text):
+tbl = str.maketrans("","",string.punctuation+string.digits)
+lm = nltk.wordnet.WordNetLemmatizer()
+stoppers = stopwords.words("english")
+
+def preprocess_text (text: str):
 	text = text.translate(tbl)
-	stoppers = stopwords.words("english")
 	text = [w.lower() for w in text.split()]
 	text = [w for w in text if w not in stoppers]
 	text = [w for w in text if w not in ENGLISH_STOP_WORDS]
-	lm = nltk.wordnet.WordNetLemmatizer()
 	text = [lm.lemmatize(w) for w in text]
 	return " ".join(text)
 
@@ -102,7 +103,7 @@ def build_dataframe():
 	master_df.dropna(how="any", inplace=True)
 
 	# due to time constraints, only take a random sample of books:
-	rand_books = master_df.sample(n=100)
+	rand_books = master_df.sample(n=15)
 
 	# presume that books are similar if: same LoCC
 	similar = [
@@ -131,13 +132,13 @@ def get_embeddings_index():
 			embeddings_index[word] = coefs
 	return embeddings_index
 
-def get_sequences(tokenizer: Tokenizer, books: tuple, sequence_max_length: int):
-	assert(len(books) == 2)
-	combined = " ".join([ preprocess_text(b) for b in books ])
-	tokenizer.fit_on_texts(combined)
-	sequences = tokenizer.texts_to_sequences(combined)
-	sequences = pad_sequences(sequences, maxlen=sequence_max_length, padding="post")
-	return sequences
+def make_sequences (tokenizer: Tokenizer, books: list, sequence_max_length: int):
+	tokenizer.fit_on_texts(books)
+	books = tokenizer.texts_to_sequences(books)
+	books = pad_sequences(books,
+		maxlen=sequence_max_length,
+		padding="post")
+	return books
 
 def get_embedding_matrix(tokenizer: Tokenizer, max_words: int, embedding_dim: int):
 	embeddings_index = get_embeddings_index()
@@ -166,7 +167,7 @@ def check_if_exists(a):
 
 def load_files_into_memory(df: DataFrame):
 	tuples = []
-	for _,a,b,similar in df.itertuples():
+	for a,b,similar in df.itertuples(name=None,index=False):
 		a = check_if_exists(a)
 		b = check_if_exists(b)
 		if a[0] is not None and b[0] is not None:
@@ -181,19 +182,27 @@ df = build_dataframe()
 df = load_files_into_memory(df)
 
 print(df)
-for i in df.itertuples():
-	print(i)
-	break
 
-'''
-books = []
-books.append(load_zipfile_to_memory("1-0.zip"))
-books.append(load_zipfile_to_memory("2.zip"))
+
 max_words = 10000
 embedding_dim = 100
-
 tokenizer = Tokenizer(num_words=max_words, oov_token="<OOV>")
-sequences = get_sequences(tokenizer=tokenizer, books=books, sequence_max_length=300)
+
+df["combined"] = df["a"] + " " + df["b"]
+print("preprocessing...")
+df["combined"] = df["combined"].map(lambda row: preprocess_text(row))
+print("done")
+
+print("making sequences...")
+X = make_sequences(tokenizer, books=df["combined"].to_list(), sequence_max_length=300)
+print("done")
+y = df["similar"]
+del df
+print(X)
+print("len X:", len(X))
+print (y)
+
+'''
 embedding_matrix = get_embedding_matrix(tokenizer=tokenizer, max_words=max_words, embedding_dim=embedding_dim)
 
 model = build_siamese_network (
