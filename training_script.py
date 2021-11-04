@@ -1,9 +1,6 @@
-from pandas.core.frame import DataFrame
 from tensorflow.python import keras
-from tensorflow.python.keras.backend import concatenate
 from tensorflow.python.keras.callbacks import EarlyStopping
-from tensorflow.python.keras.layers.core import Dropout, Lambda
-from tensorflow.python.keras.layers.normalization.batch_normalization import BatchNormalization
+from tensorflow.python.keras.layers.core import Lambda
 
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input
@@ -15,10 +12,10 @@ from tensorflow.keras.layers import LSTM
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
 
-from sklearn.neighbors import DistanceMetric
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
+from sklearn.metrics.pairwise import linear_kernel
 
 import nltk
 from nltk.corpus import stopwords
@@ -28,14 +25,14 @@ from nltk.corpus import stopwords
 import zipfile
 import string
 import os
+import random
+from multiprocessing import Pool
 
 import pandas as pd
 import numpy as np
 
 
-
 def read_book (zipfile):
-    print(zipfile.namelist())
     return zipfile.read(zipfile.namelist()[0])
 
 def load_zipfile_to_memory (fp: str, encoding: str):
@@ -49,21 +46,20 @@ def load_zipfile_to_memory (fp: str, encoding: str):
 
 
 tbl = str.maketrans("","",string.punctuation+string.digits)
-#lm = nltk.wordnet.WordNetLemmatizer()
-st = nltk.stem.PorterStemmer()
+lm = nltk.wordnet.WordNetLemmatizer()
+#st = nltk.stem.PorterStemmer()
 stoppers = stopwords.words("english")
 
 def preprocess_text (text: str):
 	text = [ w.lower() for w in text.translate(tbl).split() ]
-	return " ".join([ st.stem(w) for w in text if w not in stoppers and w not in ENGLISH_STOP_WORDS ])
+	return " ".join([ lm.lemmatize(w) for w in text if w not in stoppers and w not in ENGLISH_STOP_WORDS ])
 
 vectorizer = TfidfVectorizer(input="content", use_idf=True)
 
-def calc_tfidf (wordlist: list):
-    X = vectorizer.fit_transform([wordlist])
-    print(X.shape)
-    df = pd.DataFrame(X[0].T.todense(), index=vectorizer.get_feature_names(), columns=['TF-IDF'])
-    return df
+def get_similarity_estimate (book_pair: tuple):
+    X = vectorizer.fit_transform(book_pair)
+    X = linear_kernel(X)[0][1]
+    return X
 
 def build_siamese_network (input_shape, embedding_matrix, embedding_dim, max_words, lstm_units):
 	a = Input(shape=input_shape)
@@ -100,32 +96,6 @@ def build_siamese_network (input_shape, embedding_matrix, embedding_dim, max_wor
 	model.compile(loss="binary_crossentropy", optimizer="nadam", metrics=["accuracy"])
 	return model
 
-def build_dataframe():
-	master_df = pd.read_csv("pg_catalog.csv", sep=",", low_memory=False)
-	master_df = master_df[(master_df.Language == "en") & (master_df.Type == "Text")]
-	master_df.drop(columns=["Bookshelves", "Subjects", "Language", "Type", "Issued"], inplace=True)
-	master_df.dropna(how="any", inplace=True)
-
-	# due to time constraints, only take a random sample of books:
-	rand_books = master_df.sample(n=100)
-
-	# presume that books are similar if: same LoCC
-	similar = [
-		master_df["LoCC"].str.contains(book[0])
-			for book in rand_books[["LoCC"]].to_numpy()
-	]
-	df1 = pd.DataFrame(columns=["a", "b", "similar"])
-	df1["a"] = rand_books["Text#"]
-	df1["b"] = [ master_df[i].sample().iloc[0]["Text#"] for i in similar ]
-	df1["similar"] = [int(1) for _ in range(len(df1["a"]))]
-	df2 = pd.DataFrame(columns=["a", "b", "similar"])
-	df2["a"] = rand_books["Text#"]
-	df2["b"] = [ master_df[~i].sample().iloc[0]["Text#"] for i in similar ]
-	df2["similar"] = [int(0) for _ in range(len(df2["a"]))]
-
-	df = df1.append(df2, ignore_index=True)
-	return df
-
 def get_embeddings_index():
 	embeddings_index = {}
 	with open("glove.6B.100d.txt", "r") as f:
@@ -153,48 +123,61 @@ def get_embedding_matrix(tokenizer: Tokenizer, max_words: int, embedding_dim: in
 			embedding_matrix[i] = embedding_vector
 	return embedding_matrix
 
-def check_if_exists(a):
-	filepath = "gutenberg_books_en/{}.zip"
-	found_filepath = (None, None)
-	if os.path.exists(filepath.format(str(a))):
-		found_filepath = filepath.format(str(a)), "ASCII"
-	elif os.path.exists(filepath.format(str(a) + "-0")):
-		found_filepath = filepath.format(str(a) + "-0"), "UTF-8"
-	elif os.path.exists(filepath.format(str(a) + "-8")):
-		found_filepath = filepath.format(str(a) + "-8"), "ISO-8859-1"
+
+def get_text (path: str):
+	if path.endswith("-8.zip"):
+		return load_zipfile_to_memory(path, "ISO-8859-1")
+	elif path.endswith("-0.zip"):
+		return load_zipfile_to_memory(path, "UTF-8")
+	elif path.endswith(".zip"):
+		return load_zipfile_to_memory(path, "ASCII")
 	else:
-		print ("strike")
-	return found_filepath
+		return None
 
-def load_files_into_memory(df: DataFrame):
-	tuples = []
-	for a,b,similar in df.itertuples(name=None,index=False):
-		a = check_if_exists(a)
-		b = check_if_exists(b)
-		if a[0] is not None and b[0] is not None:
-			a = load_zipfile_to_memory(a[0], a[1])
-			b = load_zipfile_to_memory(b[0], b[1])
-			if a is not None and b is not None:
-				tuples.append((a,b,similar))
-	return pd.DataFrame(tuples, columns=["a", "b", "similar"])
+def handle_stuff(t: tuple):
+	fa, fb, dir = t
+	print (f"processing {fa} & {fb}...")
+	fa = get_text(os.path.join(dir, fa))
+	fb = get_text(os.path.join(dir, fb))
+	if fa is not None and fb is not None:
+		fa = preprocess_text(fa)
+		fb = preprocess_text(fb)
+		sim = get_similarity_estimate(( fa, fb ))
+		return {"a": fa, "b": fb, "similar": sim}
+	return None
 
+def load_random_files_preprocess_and_calculate_diff(amount_of_pairs: int):
+	dir = "gutenberg_books_en/"
+	#df = pd.DataFrame(columns=["a", "b", "similar"])
+	filenames_a = random.sample(os.listdir(dir), amount_of_pairs)
+	filenames_b = random.sample(os.listdir(dir), amount_of_pairs)
+	nltk.corpus.wordnet.ensure_loaded()
+	frames = None
+	with Pool(processes=6) as p:
+		frames = p.map(handle_stuff, [(t[0],t[1],dir) for t in zip(filenames_a, filenames_b)])
+	frames = [f for f in frames if f is not None]
+	return pd.DataFrame(frames)
 
-df = build_dataframe()
-df = load_files_into_memory(df)
+df = None
+saved_preprocessed = "data.pkl"
+if os.path.exists(saved_preprocessed):
+	df = pd.read_pickle(saved_preprocessed)
+else:
+	print("preprocessing texts...")
+	df = load_random_files_preprocess_and_calculate_diff(amount_of_pairs=5000)
+	print ("done")
+	print ("saving to disk...")
+	df.to_pickle(saved_preprocessed)
+	print("done")
 
 print(df)
 
+exit(0)
 
 max_words = 10000
 embedding_dim = 100
 tokenizer = Tokenizer(num_words=max_words, oov_token="<OOV>")
 
-print("preprocessing texts...")
-#df["a"] = df["a"].map(lambda row: preprocess_text(row))
-#df["b"] = df["b"].map(lambda row: preprocess_text(row))
-df["a"] = [ preprocess_text(row) for row in df["a"] ]
-df["b"] = [ preprocess_text(row) for row in df["b"] ]
-print("done")
 
 print("fitting tokenizer...")
 df["combined"] = df["a"] + " " + df["b"]
