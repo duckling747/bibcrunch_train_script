@@ -1,8 +1,7 @@
-from numpy.lib.npyio import load
-from tensorflow.python import keras
 from tensorflow.python.keras.backend import concatenate
 from tensorflow.python.keras.callbacks import EarlyStopping
 from tensorflow.python.keras.layers.core import Dropout
+from tensorflow.python.keras.layers.normalization.batch_normalization import BatchNormalization
 
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input
@@ -29,11 +28,9 @@ import string
 import os
 import random
 from multiprocessing import Pool
-import json
 
 import pandas as pd
 import numpy as np
-from tensorflow.python.keras.layers.normalization.batch_normalization import BatchNormalization
 
 
 #os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -76,21 +73,24 @@ def build_siamese_network (input_shape, embedding_matrix, embedding_dim, max_wor
 		weights=[embedding_matrix],
 		trainable=False
 	)
-	lstm = Bidirectional(LSTM(
-			units=lstm_units,
-			return_sequences=False,
-			dropout=0.2,
-			recurrent_dropout=0.2
-		)
-	)
+	lstm1 = Bidirectional(LSTM(
+		units=lstm_units,
+		return_sequences=True,
+		dropout=0.2,
+		recurrent_dropout=0.2,
+	))
+	lstm2 = Bidirectional(LSTM(
+		units=lstm_units//2,
+		dropout=0.2,
+		recurrent_dropout=0.2,
+	))
 	e1 = emb(a)
 	e2 = emb(b)
-	x1 = lstm(e1)
-	x2 = lstm(e2)
+	x1 = lstm1(e1)
+	x2 = lstm1(e2)
+	x1 = lstm2(x1)
+	x2 = lstm2(x2)
 	merge = concatenate([x1,x2])
-	merge = BatchNormalization()(merge)
-	merge = Dropout(0.25)(merge)
-	merge = Dense(50, activation="relu")(merge)
 	merge = BatchNormalization()(merge)
 	merge = Dropout(0.25)(merge)
 	outputs = Dense(1, activation="sigmoid")(merge)
@@ -176,7 +176,7 @@ if os.path.exists(saved_preprocessed):
 	df = pd.read_pickle(saved_preprocessed)
 else:
 	print ("preprocessing texts...")
-	frames = load_random_files_preprocess_and_calculate_diff(amount_of_pairs=2000)
+	frames = load_random_files_preprocess_and_calculate_diff(amount_of_pairs=500)
 	print ("done")
 	print ("saving to disk...")
 	pd.DataFrame(frames).to_pickle(saved_preprocessed)
@@ -184,7 +184,7 @@ else:
 	print ("please rerun the script to continue")
 	exit(0)
 
-df = sample_and_trim(df, sample_size=200, cutoff=0.15)
+df = sample_and_trim(df, sample_size=50, cutoff=0.15)
 print(df)
 
 max_words = 10000
@@ -236,7 +236,7 @@ history = model.fit (
 	[ X1train, X2train ], ytrain,
 	validation_data=([ X1val, X2val ], yval),
 	epochs=1000,
-	batch_size=64,
+	batch_size=5,
 	shuffle=True,
 	callbacks=[early_stopping]
 )
