@@ -1,6 +1,7 @@
 from tensorflow.python import keras
+from tensorflow.python.keras.backend import concatenate
 from tensorflow.python.keras.callbacks import EarlyStopping
-from tensorflow.python.keras.layers.core import Lambda
+from tensorflow.python.keras.layers.core import Dropout, Lambda
 
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input
@@ -30,6 +31,7 @@ from multiprocessing import Pool
 
 import pandas as pd
 import numpy as np
+from tensorflow.python.keras.layers.normalization.batch_normalization import BatchNormalization
 
 
 def read_book (zipfile):
@@ -82,14 +84,17 @@ def build_siamese_network (input_shape, embedding_matrix, embedding_dim, max_wor
 	e2 = emb(b)
 	x1 = lstm(e1)
 	x2 = lstm(e2)
-	manhattan_distance = lambda x: keras.backend.abs(x[0]-x[1])
-	merge = Lambda(function=manhattan_distance, name="manhattan distance", output_shape=lambda x: x[0])([x1, x2])
-	#merge = concatenate([x1,x2])
-	#merge = BatchNormalization()(merge)
-	#merge = Dropout(0.25)(merge)
-	#merge = Dense(50, activation="relu")(merge)
-	#merge = BatchNormalization()(merge)
-	#merge = Dropout(0.25)(merge)
+	#manhattan_distance = lambda x: keras.backend.abs(x[0]-x[1])
+	#merge = Lambda(function=manhattan_distance, name="manhattan distance", output_shape=lambda x: x[0])([x1, x2])
+	merge = concatenate([x1,x2])
+	merge = BatchNormalization()(merge)
+	merge = Dropout(0.25)(merge)
+	merge = Dense(50, activation="relu")(merge)
+	merge = BatchNormalization()(merge)
+	merge = Dropout(0.25)(merge)
+	merge = Dense(20, activation="relu")(merge)
+	merge = BatchNormalization()(merge)
+	merge = Dropout(0.25)(merge)
 	outputs = Dense(1, activation="sigmoid")(merge)
 	model = Model(inputs=[a,b], outputs=outputs)
 	model.summary()
@@ -158,6 +163,15 @@ def load_random_files_preprocess_and_calculate_diff(amount_of_pairs: int):
 	frames = [f for f in frames if f is not None]
 	return pd.DataFrame(frames)
 
+def sample_and_trim(df, sample_size, cutoff):
+	a = df[df["similar"] > cutoff].sample(sample_size)
+	b = df[df["similar"] <= cutoff].sample(sample_size)
+	del df
+	a["similar"] = int(1)
+	b["similar"] = int(0)
+	return pd.concat([a,b], ignore_index=True)
+
+
 df = None
 saved_preprocessed = "data.pkl"
 if os.path.exists(saved_preprocessed):
@@ -170,9 +184,9 @@ else:
 	df.to_pickle(saved_preprocessed)
 	print("done")
 
+df = sample_and_trim(df, sample_size=1000, cutoff=0.3)
 print(df)
 
-exit(0)
 
 max_words = 10000
 embedding_dim = 100
@@ -182,6 +196,7 @@ tokenizer = Tokenizer(num_words=max_words, oov_token="<OOV>")
 print("fitting tokenizer...")
 df["combined"] = df["a"] + " " + df["b"]
 tokenizer.fit_on_texts(df["combined"].to_numpy())
+df.drop(columns=["combined"])
 print("done")
 
 print("making sequences...")
