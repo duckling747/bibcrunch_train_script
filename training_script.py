@@ -1,7 +1,8 @@
+from numpy.lib.npyio import load
 from tensorflow.python import keras
 from tensorflow.python.keras.backend import concatenate
 from tensorflow.python.keras.callbacks import EarlyStopping
-from tensorflow.python.keras.layers.core import Dropout, Lambda
+from tensorflow.python.keras.layers.core import Dropout
 
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input
@@ -16,7 +17,7 @@ from keras.preprocessing.sequence import pad_sequences
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
-from sklearn.metrics.pairwise import linear_kernel
+from sklearn.metrics.pairwise import cosine_similarity
 
 import nltk
 from nltk.corpus import stopwords
@@ -28,11 +29,14 @@ import string
 import os
 import random
 from multiprocessing import Pool
+import json
 
 import pandas as pd
 import numpy as np
 from tensorflow.python.keras.layers.normalization.batch_normalization import BatchNormalization
 
+
+#os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 def read_book (zipfile):
     return zipfile.read(zipfile.namelist()[0])
@@ -49,7 +53,6 @@ def load_zipfile_to_memory (fp: str, encoding: str):
 
 tbl = str.maketrans("","",string.punctuation+string.digits)
 lm = nltk.wordnet.WordNetLemmatizer()
-#st = nltk.stem.PorterStemmer()
 stoppers = stopwords.words("english")
 
 def preprocess_text (text: str):
@@ -58,9 +61,9 @@ def preprocess_text (text: str):
 
 vectorizer = TfidfVectorizer(input="content", use_idf=True)
 
-def get_similarity_estimate (book_pair: tuple):
+def get_dfidf_similarity_estimate (book_pair: tuple):
     X = vectorizer.fit_transform(book_pair)
-    X = linear_kernel(X)[0][1]
+    X = cosine_similarity(X)[0][1]
     return X
 
 def build_siamese_network (input_shape, embedding_matrix, embedding_dim, max_words, lstm_units):
@@ -84,15 +87,10 @@ def build_siamese_network (input_shape, embedding_matrix, embedding_dim, max_wor
 	e2 = emb(b)
 	x1 = lstm(e1)
 	x2 = lstm(e2)
-	#manhattan_distance = lambda x: keras.backend.abs(x[0]-x[1])
-	#merge = Lambda(function=manhattan_distance, name="manhattan distance", output_shape=lambda x: x[0])([x1, x2])
 	merge = concatenate([x1,x2])
 	merge = BatchNormalization()(merge)
 	merge = Dropout(0.25)(merge)
 	merge = Dense(50, activation="relu")(merge)
-	merge = BatchNormalization()(merge)
-	merge = Dropout(0.25)(merge)
-	merge = Dense(20, activation="relu")(merge)
 	merge = BatchNormalization()(merge)
 	merge = Dropout(0.25)(merge)
 	outputs = Dense(1, activation="sigmoid")(merge)
@@ -147,46 +145,47 @@ def handle_stuff(t: tuple):
 	if fa is not None and fb is not None:
 		fa = preprocess_text(fa)
 		fb = preprocess_text(fb)
-		sim = get_similarity_estimate(( fa, fb ))
-		return {"a": fa, "b": fb, "similar": sim}
+		sim = get_dfidf_similarity_estimate (( fa, fb ))
+		ida = t[0].replace("-8.zip","").replace("-0.zip","").replace(".zip", "")
+		idb = t[1].replace("-8.zip","").replace("-0.zip","").replace(".zip", "")
+		return {"id_a": ida, "id_b": idb, "a": fa, "b": fb, "similar": sim}
 	return None
 
 def load_random_files_preprocess_and_calculate_diff(amount_of_pairs: int):
 	dir = "gutenberg_books_en/"
-	#df = pd.DataFrame(columns=["a", "b", "similar"])
 	filenames_a = random.sample(os.listdir(dir), amount_of_pairs)
 	filenames_b = random.sample(os.listdir(dir), amount_of_pairs)
 	nltk.corpus.wordnet.ensure_loaded()
 	frames = None
-	with Pool(processes=6) as p:
+	with Pool(processes=7) as p:
 		frames = p.map(handle_stuff, [(t[0],t[1],dir) for t in zip(filenames_a, filenames_b)])
-	frames = [f for f in frames if f is not None]
-	return pd.DataFrame(frames)
+	return [f for f in frames if f is not None]
 
 def sample_and_trim(df, sample_size, cutoff):
-	a = df[df["similar"] > cutoff].sample(sample_size)
-	b = df[df["similar"] <= cutoff].sample(sample_size)
+	a = df[df["similar"] >= cutoff].sample(sample_size)
+	b = df[df["similar"] < cutoff].sample(sample_size)
 	del df
-	a["similar"] = int(1)
-	b["similar"] = int(0)
+	a["similar"] = int(0)
+	b["similar"] = int(1)
 	return pd.concat([a,b], ignore_index=True)
 
 
 df = None
-saved_preprocessed = "data.pkl"
+saved_preprocessed = "preprocessed_data.pkl"
 if os.path.exists(saved_preprocessed):
 	df = pd.read_pickle(saved_preprocessed)
 else:
-	print("preprocessing texts...")
-	df = load_random_files_preprocess_and_calculate_diff(amount_of_pairs=5000)
+	print ("preprocessing texts...")
+	frames = load_random_files_preprocess_and_calculate_diff(amount_of_pairs=2000)
 	print ("done")
 	print ("saving to disk...")
-	df.to_pickle(saved_preprocessed)
-	print("done")
+	pd.DataFrame(frames).to_pickle(saved_preprocessed)
+	print ("done")
+	print ("please rerun the script to continue")
+	exit(0)
 
-df = sample_and_trim(df, sample_size=1000, cutoff=0.3)
+df = sample_and_trim(df, sample_size=200, cutoff=0.15)
 print(df)
-
 
 max_words = 10000
 embedding_dim = 100
