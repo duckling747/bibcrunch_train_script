@@ -28,6 +28,7 @@ import string
 import os
 import random
 from multiprocessing import Pool
+import pickle
 
 import pandas as pd
 import numpy as np
@@ -246,5 +247,6 @@ print(ypred)
 
 model.save("model.h5")
 
-
+with open("tokenizer.pickle", "rb") as h:
+	pickle.dump(tokenizer, h, protocol=pickle.HIGHEST_PROTOCOL)
 
