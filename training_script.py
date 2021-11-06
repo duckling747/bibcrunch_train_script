@@ -1,7 +1,5 @@
-from tensorflow.python.keras.backend import concatenate
 from tensorflow.python.keras.callbacks import EarlyStopping
-from tensorflow.python.keras.layers.core import Dropout
-from tensorflow.python.keras.layers.normalization.batch_normalization import BatchNormalization
+from tensorflow.python.keras.layers.core import Lambda
 
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input
@@ -9,6 +7,7 @@ from tensorflow.keras.layers import Dense
 from tensorflow.keras.layers import Embedding
 from tensorflow.keras.layers import Bidirectional
 from tensorflow.keras.layers import LSTM
+from tensorflow.keras.backend import abs as kabs
 
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
@@ -74,30 +73,22 @@ def build_siamese_network (input_shape, embedding_matrix, embedding_dim, max_wor
 		weights=[embedding_matrix],
 		trainable=False
 	)
-	lstm1 = Bidirectional(LSTM(
+	lstm = Bidirectional(LSTM(
 		units=lstm_units,
-		return_sequences=True,
-		dropout=0.2,
-		recurrent_dropout=0.2,
+		return_sequences=False,
+		dropout=0.3,
+		recurrent_dropout=0.3,
 	))
-	lstm2 = Bidirectional(LSTM(
-		units=lstm_units//2,
-		dropout=0.2,
-		recurrent_dropout=0.2,
-	))
-	e1 = emb(a)
-	e2 = emb(b)
-	x1 = lstm1(e1)
-	x2 = lstm1(e2)
-	x1 = lstm2(x1)
-	x2 = lstm2(x2)
-	merge = concatenate([x1,x2])
-	merge = BatchNormalization()(merge)
-	merge = Dropout(0.25)(merge)
+	x1 = emb(a)
+	x2 = emb(b)
+	x1 = lstm(x1)
+	x2 = lstm(x2)
+	manhattan = lambda x: kabs(x[0]-x[1])
+	merge = Lambda(function=manhattan, output_shape=lambda x: x[0], name="manhattan")([x1,x2])
 	outputs = Dense(1, activation="sigmoid")(merge)
 	model = Model(inputs=[a,b], outputs=outputs)
 	model.summary()
-	model.compile(loss="binary_crossentropy", optimizer="nadam", metrics=["accuracy"])
+	model.compile(loss="mse", optimizer="adam", metrics=["accuracy"])
 	return model
 
 def get_embeddings_index():
@@ -162,13 +153,13 @@ def load_random_files_preprocess_and_calculate_diff(amount_of_pairs: int):
 		frames = p.map(handle_stuff, [(t[0],t[1],dir) for t in zip(filenames_a, filenames_b)])
 	return [f for f in frames if f is not None]
 
-def sample_and_trim(df, sample_size, cutoff):
-	a = df[df["similar"] >= cutoff].sample(sample_size)
-	b = df[df["similar"] < cutoff].sample(sample_size)
+def sample_and_trim(df, sample_size):
+	similar = df[df["similar"] >= 0.40].sample(sample_size)
+	not_similar = df[df["similar"] <= 0.15].sample(sample_size)
 	del df
-	a["similar"] = int(0)
-	b["similar"] = int(1)
-	return pd.concat([a,b], ignore_index=True)
+	similar["similar"] = int(1)
+	not_similar["similar"] = int(0)
+	return pd.concat([similar, not_similar], ignore_index=True)
 
 
 df = None
@@ -185,11 +176,13 @@ else:
 	print ("please rerun the script to continue")
 	exit(0)
 
-df = sample_and_trim(df, sample_size=50, cutoff=0.15)
+df = sample_and_trim(df, sample_size=50)
 print(df)
 
-max_words = 10000
-embedding_dim = 100
+max_words = 10000 # i.e. unique words
+embedding_dim = 100 # see pretrained Glove file
+sequence_max_length = 4000
+lstm_units_top_layer = 64
 tokenizer = Tokenizer(num_words=max_words, oov_token="<OOV>")
 
 
@@ -200,8 +193,8 @@ df.drop(columns=["combined"])
 print("done")
 
 print("making sequences...")
-X1 = make_sequences(tokenizer, books=df["a"].to_numpy(), sequence_max_length=300)
-X2 = make_sequences(tokenizer, books=df["b"].to_numpy(), sequence_max_length=300)
+X1 = make_sequences(tokenizer, books=df["a"].to_numpy(), sequence_max_length=sequence_max_length)
+X2 = make_sequences(tokenizer, books=df["b"].to_numpy(), sequence_max_length=sequence_max_length)
 print("done")
 y = df["similar"].to_numpy()
 del df
@@ -220,10 +213,10 @@ print("len y:", len(y))
 embedding_matrix = get_embedding_matrix(tokenizer=tokenizer, max_words=max_words, embedding_dim=embedding_dim)
 
 model = build_siamese_network (
-	input_shape=(300,),
+	input_shape=(sequence_max_length,),
 	embedding_matrix=embedding_matrix,
 	embedding_dim=embedding_dim,
-	lstm_units=256,
+	lstm_units=lstm_units_top_layer,
 	max_words=max_words
 )
 
@@ -237,7 +230,7 @@ history = model.fit (
 	[ X1train, X2train ], ytrain,
 	validation_data=([ X1val, X2val ], yval),
 	epochs=1000,
-	batch_size=5,
+	batch_size=8,
 	shuffle=True,
 	callbacks=[early_stopping]
 )
@@ -247,6 +240,6 @@ print(ypred)
 
 model.save("model.h5")
 
-with open("tokenizer.pickle", "rb") as h:
+with open("tokenizer.pickle", "wb") as h:
 	pickle.dump(tokenizer, h, protocol=pickle.HIGHEST_PROTOCOL)
 
