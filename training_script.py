@@ -168,7 +168,7 @@ if os.path.exists(saved_preprocessed):
 	df = pd.read_pickle(saved_preprocessed)
 else:
 	print ("preprocessing texts...")
-	frames = load_random_files_preprocess_and_calculate_diff(amount_of_pairs=500)
+	frames = load_random_files_preprocess_and_calculate_diff(amount_of_pairs=400)
 	print ("done")
 	print ("saving to disk...")
 	pd.DataFrame(frames).to_pickle(saved_preprocessed)

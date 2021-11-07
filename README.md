@@ -1,7 +1,7 @@
 # BibCrunch training script
 This repository holds the script used to train a text similarity recognition model, using Keras. 
 The script is written in Python, and needs the free-to-download pretrained 100-dimensional Glove embedding
-("glove.6B.100d.txt"), Project Gutenberg catalog ("pg_catalog.csv"), and a decent amount of downloaded
+("glove.6B.100d.txt") and a decent amount of downloaded
 Project Gutenberg books as zip files in order to work properly. The Glove file can be downloaded
 [here](https://nlp.stanford.edu/data/glove.6B.zip), and the Gutenberg catalog 
 [here](https://www.gutenberg.org/cache/epub/feeds/pg_catalog.csv.zip). The books can be downloaded
