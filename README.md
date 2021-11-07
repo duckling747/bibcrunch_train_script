@@ -13,5 +13,7 @@ amounts of Project Gutenberg books.
 Notice that there is no requirements file. Please check from the imports within the script, what
 the script needs in order to work.
 
+The books as zip files need to be in a flat hierarchy inside the gutenberg_books_en directory.
+
 Once all the aforementioned prerequisites are handled, simply run the script. For example, on Debian 11, run
  `python3 training_script.py`. 
