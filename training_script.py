@@ -181,8 +181,8 @@ print(df)
 
 max_words = 10000 # i.e. unique words
 embedding_dim = 100 # see pretrained Glove file
-sequence_max_length = 2000
-lstm_units_top_layer = 64
+sequence_max_length = 4000
+lstm_units_top_layer = 128
 tokenizer = Tokenizer(num_words=max_words, oov_token="<OOV>")
 
 
